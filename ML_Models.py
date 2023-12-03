@@ -8,16 +8,21 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
 from sklearn.linear_model import SGDClassifier
 from sklearn.metrics import classification_report
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, BatchNormalization
-from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import confusion_matrix, roc_curve, auc, precision_recall_curve
 import matplotlib.pyplot as plt
-from tensorflow.keras.utils import to_categorical
+from sklearn.metrics import roc_curve, auc
+from sklearn.preprocessing import label_binarize
+from itertools import cycle
 import seaborn as sns
+from sklearn.metrics import roc_auc_score
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Activation
+from tensorflow.keras.layers import BatchNormalization
+from tensorflow.keras.layers import Dropout
 
 
 # Load and preprocess data
@@ -31,20 +36,20 @@ scaler = MinMaxScaler()
 X = scaler.fit_transform(df.drop('label', axis=1))
 Y = df['label'].values  # Directly use label column
 
-# Split data
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=10)
-
-# Label Encoding (Optional)
+# Label Encoding
 label_encoder = LabelEncoder()
-Y_train_encoded = label_encoder.fit_transform(Y_train)
-Y_test_encoded = label_encoder.transform(Y_test)
-# Determine the number of unique classes
+Y_encoded = label_encoder.fit_transform(Y)
 
-# num_classes = len(np.unique(Y_train_encoded))
+# Split data
+X_train, X_test, Y_train_encoded, Y_test_encoded = train_test_split(X, Y_encoded, test_size=0.2, random_state=10)
+
+# Determine the number of unique classes
 num_classes = len(label_encoder.classes_)
-# One-hot encode the labels
+
+# One-hot encode the labels for neural network model
 Y_train_one_hot = to_categorical(Y_train_encoded, num_classes=num_classes)
 Y_test_one_hot = to_categorical(Y_test_encoded, num_classes=num_classes)
+
 
 # Deep Neural Network Model
 def train_optimized_neural_network(X_train, Y_train, X_test, Y_test):
@@ -141,7 +146,7 @@ Y_pred_nn_names = [class_names[i] for i in Y_pred_nn]
 # Generate classification reports with original labels
 print("Neural Network Report:")
 # print(classification_report(Y_test_encoded, Y_pred_nn))
-print(classification_report(label_encoder.transform(Y_test), label_encoder.transform(Y_pred_nn_names),zero_division=1, target_names=class_names))
+print(classification_report(Y_test_encoded, label_encoder.transform(Y_pred_nn_names), zero_division=1, target_names=class_names))
 
 print("Decision Tree Classification Report:")
 print(classification_report(label_encoder.inverse_transform(Y_test_encoded), Y_pred_dt))
@@ -157,3 +162,78 @@ print(classification_report(label_encoder.inverse_transform(Y_test_encoded), Y_p
 
 print("Gradient Boosting Machine Classification Report:")
 print(classification_report(label_encoder.inverse_transform(Y_test_encoded), Y_pred_gbm))
+
+
+# In the plot_confusion_matrix function:
+def plot_confusion_matrix(model, X_test, Y_test_encoded):
+    Y_pred_encoded = model.predict(X_test)
+    if len(Y_pred_encoded.shape) > 1 and Y_pred_encoded.shape[1] > 1:
+        Y_pred_encoded = np.argmax(Y_pred_encoded, axis=1)  # Only for neural network predictions
+
+    mat = confusion_matrix(Y_test_encoded, Y_pred_encoded)
+    sns.heatmap(mat.T, square=True, annot=True, fmt='d', cbar=False)
+    plt.xlabel('true label')
+    plt.ylabel('predicted label')
+    plt.show()
+
+def plot_feature_importance(model):
+    feature_importances = pd.Series(model.feature_importances_, index=df.columns[:-1])
+    feature_importances.nlargest(10).plot(kind='barh')
+
+def plot_multiclass_roc_curve(models, X_test, Y_test, n_classes):
+    for model in models:
+        y_score = model.predict_proba(X_test)
+
+        # Compute ROC curve and ROC area for each class
+        fpr = dict()
+        tpr = dict()
+        roc_auc = dict()
+        for i in range(n_classes):
+            fpr[i], tpr[i], _ = roc_curve(Y_test[:, i], y_score[:, i])
+            roc_auc[i] = auc(fpr[i], tpr[i])
+
+        # Compute micro-average ROC curve and ROC area
+        fpr["micro"], tpr["micro"], _ = roc_curve(Y_test.ravel(), y_score.ravel())
+        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+
+        plt.figure()
+        plt.plot(fpr[2], tpr[2], color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc[2])
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic for class {}'.format(i))
+        plt.legend(loc="lower right")
+        plt.show()
+
+def plot_multiclass_precision_recall_curve(models, X_test, Y_test, n_classes):
+    for model in models:
+        y_score = model.predict_proba(X_test)
+
+        precision = dict()
+        recall = dict()
+        for i in range(n_classes):
+            precision[i], recall[i], _ = precision_recall_curve(Y_test[:, i], y_score[:, i])
+            plt.plot(recall[i], precision[i], lw=2, label='class {}'.format(i))
+
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.legend(loc="best")
+        plt.title("Precision vs. Recall curve")
+        plt.show()
+
+plot_confusion_matrix(dt_model, X_test, Y_test_encoded)
+plot_confusion_matrix(rf_model, X_test, Y_test_encoded)
+plot_confusion_matrix(gbm_model, X_test, Y_test_encoded)
+
+# Feature Importance Plot
+plot_feature_importance(rf_model)
+plot_feature_importance(gbm_model)
+
+# ROC and Precision-Recall Curves
+plot_multiclass_roc_curve([rf_model, gbm_model], X_test, Y_test_one_hot, num_classes)
+plot_multiclass_precision_recall_curve([rf_model, gbm_model], X_test, Y_test_one_hot, num_classes)
+
+# Show the plots
+plt.show()
