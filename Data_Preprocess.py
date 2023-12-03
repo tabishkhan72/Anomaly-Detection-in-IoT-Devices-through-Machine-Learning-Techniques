@@ -26,7 +26,19 @@ label_replacements = {
     '(empty)   Malicious   Okiru': 'Okiru',
     '-   Benign   -': 'Benign',
     '(empty)   Benign   -': 'Benign',
-    # Add other replacements as needed
+    '-   Malicious   DDoS': 'DDoS',
+    '-   Malicious   C&C': 'C&C',
+    '(empty)   Malicious   C&C': 'C&C',
+    '-   Malicious   Attack': 'Attack',
+    '(empty)   Malicious   Attack': 'Attack',
+    '-   Malicious   C&C-HeartBeat': 'C&C-HeartBeat',
+    '(empty)   Malicious   C&C-HeartBeat': 'C&C-HeartBeat',
+    '-   Malicious   C&C-FileDownload': 'C&C-FileDownload',
+    '-   Malicious   C&C-Torii': 'C&C-Torii',
+    '-   Malicious   C&C-HeartBeat-FileDownload': 'C&C-HeartBeat-FileDownload',
+    '-   Malicious   FileDownload': 'FileDownload',
+    '-   Malicious   C&C-Mirai': 'C&C-Mirai',
+    '-   Malicious   Okiru-Attack': 'Okiru-Attack'
 }
 df_combined['label'] = df_combined['label'].replace(label_replacements)
 
