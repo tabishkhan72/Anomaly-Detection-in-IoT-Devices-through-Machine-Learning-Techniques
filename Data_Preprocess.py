@@ -1,24 +1,20 @@
 import pandas as pd
 import os
 
-# Function to read and preprocess each file
-def read_and_preprocess(file_path):
-    df = pd.read_table(filepath_or_buffer=file_path, skiprows=10, nrows=100000, 
-                       names=['ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'proto', 'service', 'duration',
-                              'orig_bytes', 'resp_bytes', 'conn_state', 'local_orig', 'local_resp', 'missed_bytes', 'history',
-                              'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes', 'label'], 
-                       index_col=False)
-    df = df[:-1]  # Drop the last row
-    return df
+# File IDs to process
+file_ids = [34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1]
 
-# List of file paths
-file_paths = ["C:/Users/tabis/OneDrive/Desktop/SU_Classes/IOT/PROJECT/opt/Malware-Project/BigDataset/IoTScenarios/CTU-IoT-Malware-Capture-{0}-1/bro/conn.log.labeled".format(i) for i in [34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1]]
+# Base path
+base_path = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\opt\Malware-Project\BigDataset\IoTScenarios"
 
-# Read and combine dataframes
-frames = [read_and_preprocess(file) for file in file_paths]
-df_combined = pd.concat(frames, ignore_index=True)
+# Columns for the log files
+columns = [
+    'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'proto', 'service', 'duration',
+    'orig_bytes', 'resp_bytes', 'conn_state', 'local_orig', 'local_resp', 'missed_bytes', 'history',
+    'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes', 'label'
+]
 
-# Simplify label names
+# Labels normalization map
 label_replacements = {
     '-   Malicious   PartOfAHorizontalPortScan': 'PartOfAHorizontalPortScan',
     '(empty)   Malicious   PartOfAHorizontalPortScan': 'PartOfAHorizontalPortScan',
@@ -40,21 +36,57 @@ label_replacements = {
     '-   Malicious   C&C-Mirai': 'C&C-Mirai',
     '-   Malicious   Okiru-Attack': 'Okiru-Attack'
 }
+
+# Columns to drop
+drop_columns = ['ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'service', 'local_orig', 'local_resp', 'history']
+
+# Columns to treat as numeric
+numeric_columns = ['duration', 'orig_bytes', 'resp_bytes']
+
+def read_and_preprocess(file_path):
+    """
+    Reads and preprocesses a single conn.log.labeled file.
+    """
+    try:
+        df = pd.read_table(
+            filepath_or_buffer=file_path,
+            skiprows=10,
+            nrows=100000,
+            names=columns,
+            index_col=False,
+            low_memory=False
+        )
+        df = df[:-1]  # Remove last row if it's malformed
+        return df
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
+        return pd.DataFrame()
+
+# Read and combine data
+dataframes = []
+for file_id in file_ids:
+    file_path = os.path.join(base_path, f"CTU-IoT-Malware-Capture-{file_id}-1", "bro", "conn.log.labeled")
+    df = read_and_preprocess(file_path)
+    if not df.empty:
+        dataframes.append(df)
+
+df_combined = pd.concat(dataframes, ignore_index=True)
+
+# Normalize labels
 df_combined['label'] = df_combined['label'].replace(label_replacements)
 
-# Drop unnecessary columns
-columns_to_drop = ['ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'service', 'local_orig', 'local_resp', 'history']
-df_combined.drop(columns=columns_to_drop, inplace=True)
+# Drop unused columns
+df_combined.drop(columns=drop_columns, inplace=True, errors='ignore')
 
-# Convert '-' to '0' in numeric columns and create dummies
-numeric_cols = ['duration', 'orig_bytes', 'resp_bytes']
-df_combined[numeric_cols] = df_combined[numeric_cols].replace('-', '0')
-df_combined[numeric_cols] = df_combined[numeric_cols].astype(float)
+# Handle missing and malformed values
+df_combined[numeric_columns] = df_combined[numeric_columns].replace('-', '0')
+df_combined[numeric_columns] = df_combined[numeric_columns].astype(float)
 df_combined.fillna(-1, inplace=True)
 
-# Create dummy variables
-df_combined = pd.get_dummies(df_combined, columns=['proto', 'conn_state'])
+# One-hot encoding for categorical features
+df_combined = pd.get_dummies(df_combined, columns=['proto', 'conn_state'], prefix=['proto', 'conn'])
 
-# Save to CSV in the specified directory
-output_filepath = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
-df_combined.to_csv(output_filepath, index=False)
+# Save to CSV
+output_path = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
+df_combined.to_csv(output_path, index=False)
+print(f"Data saved to: {output_path}")
