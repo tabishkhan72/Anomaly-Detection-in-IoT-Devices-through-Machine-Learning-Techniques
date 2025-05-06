@@ -1,92 +1,111 @@
 import pandas as pd
 import os
 
-# File IDs to process
-file_ids = [34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1]
+# === Configuration ===
+FILE_IDS = [34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1]
+BASE_PATH = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\opt\Malware-Project\BigDataset\IoTScenarios"
+OUTPUT_PATH = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
 
-# Base path
-base_path = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\opt\Malware-Project\BigDataset\IoTScenarios"
-
-# Columns for the log files
-columns = [
+# === Schema ===
+COLUMNS = [
     'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'proto', 'service', 'duration',
     'orig_bytes', 'resp_bytes', 'conn_state', 'local_orig', 'local_resp', 'missed_bytes', 'history',
     'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes', 'label'
 ]
 
-# Labels normalization map
-label_replacements = {
-    '-   Malicious   PartOfAHorizontalPortScan': 'PartOfAHorizontalPortScan',
-    '(empty)   Malicious   PartOfAHorizontalPortScan': 'PartOfAHorizontalPortScan',
-    '-   Malicious   Okiru': 'Okiru',
-    '(empty)   Malicious   Okiru': 'Okiru',
-    '-   Benign   -': 'Benign',
-    '(empty)   Benign   -': 'Benign',
-    '-   Malicious   DDoS': 'DDoS',
-    '-   Malicious   C&C': 'C&C',
-    '(empty)   Malicious   C&C': 'C&C',
-    '-   Malicious   Attack': 'Attack',
-    '(empty)   Malicious   Attack': 'Attack',
-    '-   Malicious   C&C-HeartBeat': 'C&C-HeartBeat',
-    '(empty)   Malicious   C&C-HeartBeat': 'C&C-HeartBeat',
-    '-   Malicious   C&C-FileDownload': 'C&C-FileDownload',
-    '-   Malicious   C&C-Torii': 'C&C-Torii',
-    '-   Malicious   C&C-HeartBeat-FileDownload': 'C&C-HeartBeat-FileDownload',
-    '-   Malicious   FileDownload': 'FileDownload',
-    '-   Malicious   C&C-Mirai': 'C&C-Mirai',
-    '-   Malicious   Okiru-Attack': 'Okiru-Attack'
+DROP_COLUMNS = [
+    'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 
+    'service', 'local_orig', 'local_resp', 'history'
+]
+
+NUMERIC_COLUMNS = ['duration', 'orig_bytes', 'resp_bytes']
+
+LABEL_MAP = {
+    v: k for k, v in {
+        'PartOfAHorizontalPortScan': ['-   Malicious   PartOfAHorizontalPortScan', '(empty)   Malicious   PartOfAHorizontalPortScan'],
+        'Okiru': ['-   Malicious   Okiru', '(empty)   Malicious   Okiru'],
+        'Benign': ['-   Benign   -', '(empty)   Benign   -'],
+        'DDoS': ['-   Malicious   DDoS'],
+        'C&C': ['-   Malicious   C&C', '(empty)   Malicious   C&C'],
+        'Attack': ['-   Malicious   Attack', '(empty)   Malicious   Attack'],
+        'C&C-HeartBeat': ['-   Malicious   C&C-HeartBeat', '(empty)   Malicious   C&C-HeartBeat'],
+        'C&C-FileDownload': ['-   Malicious   C&C-FileDownload'],
+        'C&C-Torii': ['-   Malicious   C&C-Torii'],
+        'C&C-HeartBeat-FileDownload': ['-   Malicious   C&C-HeartBeat-FileDownload'],
+        'FileDownload': ['-   Malicious   FileDownload'],
+        'C&C-Mirai': ['-   Malicious   C&C-Mirai'],
+        'Okiru-Attack': ['-   Malicious   Okiru-Attack']
+    }.items() for v in v
 }
 
-# Columns to drop
-drop_columns = ['ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'service', 'local_orig', 'local_resp', 'history']
 
-# Columns to treat as numeric
-numeric_columns = ['duration', 'orig_bytes', 'resp_bytes']
+def normalize_label(label):
+    return LABEL_MAP.get(label.strip(), label.strip())
 
-def read_and_preprocess(file_path):
-    """
-    Reads and preprocesses a single conn.log.labeled file.
-    """
+
+def read_conn_log(file_path):
+    """Reads a conn.log.labeled file and returns a cleaned DataFrame."""
     try:
         df = pd.read_table(
-            filepath_or_buffer=file_path,
+            file_path,
             skiprows=10,
             nrows=100000,
-            names=columns,
-            index_col=False,
-            low_memory=False
+            names=COLUMNS,
+            dtype=str,
+            engine='python'
         )
-        df = df[:-1]  # Remove last row if it's malformed
-        return df
+        return df.iloc[:-1]  # Drop potentially malformed last row
     except Exception as e:
-        print(f"Error processing {file_path}: {e}")
+        print(f"[ERROR] Failed to process {file_path}: {e}")
         return pd.DataFrame()
 
-# Read and combine data
-dataframes = []
-for file_id in file_ids:
-    file_path = os.path.join(base_path, f"CTU-IoT-Malware-Capture-{file_id}-1", "bro", "conn.log.labeled")
-    df = read_and_preprocess(file_path)
-    if not df.empty:
-        dataframes.append(df)
 
-df_combined = pd.concat(dataframes, ignore_index=True)
+def preprocess_dataframe(df):
+    """Preprocesses the combined DataFrame: normalize labels, convert types, one-hot encode."""
+    # Label normalization
+    df['label'] = df['label'].apply(normalize_label)
 
-# Normalize labels
-df_combined['label'] = df_combined['label'].replace(label_replacements)
+    # Drop irrelevant columns
+    df.drop(columns=DROP_COLUMNS, errors='ignore', inplace=True)
 
-# Drop unused columns
-df_combined.drop(columns=drop_columns, inplace=True, errors='ignore')
+    # Convert numeric columns
+    for col in NUMERIC_COLUMNS:
+        df[col] = pd.to_numeric(df[col].replace('-', '0'), errors='coerce')
 
-# Handle missing and malformed values
-df_combined[numeric_columns] = df_combined[numeric_columns].replace('-', '0')
-df_combined[numeric_columns] = df_combined[numeric_columns].astype(float)
-df_combined.fillna(-1, inplace=True)
+    # Fill missing values
+    df.fillna(-1, inplace=True)
 
-# One-hot encoding for categorical features
-df_combined = pd.get_dummies(df_combined, columns=['proto', 'conn_state'], prefix=['proto', 'conn'])
+    # One-hot encoding for categorical columns
+    df = pd.get_dummies(df, columns=['proto', 'conn_state'], prefix=['proto', 'conn'])
 
-# Save to CSV
-output_path = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
-df_combined.to_csv(output_path, index=False)
-print(f"Data saved to: {output_path}")
+    return df
+
+
+def main():
+    all_data = []
+
+    for file_id in FILE_IDS:
+        folder = f"CTU-IoT-Malware-Capture-{file_id}-1"
+        file_path = os.path.join(BASE_PATH, folder, "bro", "conn.log.labeled")
+
+        if os.path.exists(file_path):
+            df = read_conn_log(file_path)
+            if not df.empty:
+                all_data.append(df)
+        else:
+            print(f"[WARNING] File not found: {file_path}")
+
+    if not all_data:
+        print("[ABORT] No data files could be processed.")
+        return
+
+    print("[INFO] Concatenating and preprocessing data...")
+    combined_df = pd.concat(all_data, ignore_index=True)
+    processed_df = preprocess_dataframe(combined_df)
+
+    processed_df.to_csv(OUTPUT_PATH, index=False)
+    print(f"[SUCCESS] Processed data saved to: {OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()
