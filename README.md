@@ -33,10 +33,10 @@ We explore various machine learning algorithms, including:
 
 ### **3️⃣ Evaluation Metrics**  
 The models are assessed using:  
-✔ **Precision** – Accuracy of predicted anomalies.  
-✔ **Recall** – Ability to detect true anomalies.  
-✔ **F1 Score** – Balance between precision and recall.  
-✔ **AUC-ROC Curve** – Model performance across different threshold values.  
+✔ **Precision** – Accuracy of predicted anomalies  
+✔ **Recall** – Ability to detect true anomalies  
+✔ **F1 Score** – Balance between precision and recall  
+✔ **AUC-ROC Curve** – Model performance across different threshold values  
 
 ### **4️⃣ Benchmarking & Real-World Testing**  
 - Compare the **effectiveness of different ML models**.  
