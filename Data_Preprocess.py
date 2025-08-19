@@ -1,111 +1,205 @@
-import pandas as pd
+from __future__ import annotations
+
 import os
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
+import pandas as pd
 
-# === Configuration ===
-FILE_IDS = [34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1]
+
+# =========================
+# Configuration
+# =========================
+
+# If you want to limit to specific capture ids, set CAPTURE_IDS to integers like [34, 43, 44]
+# If CAPTURE_IDS is None, the script will auto discover folders that match the CTU IoT layout.
+CAPTURE_IDS: Optional[List[int]] = [
+    34, 43, 44, 49, 52, 20, 21, 42, 60, 17, 36, 33, 8, 35, 48, 39, 7, 9, 3, 1
+]
+
 BASE_PATH = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\opt\Malware-Project\BigDataset\IoTScenarios"
-OUTPUT_PATH = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
+OUTPUT_CSV = r"C:\Users\tabis\OneDrive\Desktop\SU_Classes\IOT\PROJECT\iot23_combined.csv"
+# Optional Parquet output for faster reads later
+OUTPUT_PARQUET: Optional[str] = None  # for example r"C:\path\to\iot23_combined.parquet"
 
-# === Schema ===
+# Chunk size per file. Increase if you have lots of RAM, decrease if memory is limited.
+CHUNK_SIZE = 500_000
+
+# Keep only these columns and in this order, if present.
 COLUMNS = [
-    'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 'proto', 'service', 'duration',
-    'orig_bytes', 'resp_bytes', 'conn_state', 'local_orig', 'local_resp', 'missed_bytes', 'history',
-    'orig_pkts', 'orig_ip_bytes', 'resp_pkts', 'resp_ip_bytes', 'label'
+    "ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto", "service", "duration",
+    "orig_bytes", "resp_bytes", "conn_state", "local_orig", "local_resp", "missed_bytes", "history",
+    "orig_pkts", "orig_ip_bytes", "resp_pkts", "resp_ip_bytes", "label",
 ]
 
+# Columns to drop before modeling
 DROP_COLUMNS = [
-    'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p', 
-    'service', 'local_orig', 'local_resp', 'history'
+    "ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p",
+    "service", "local_orig", "local_resp", "history",
 ]
 
-NUMERIC_COLUMNS = ['duration', 'orig_bytes', 'resp_bytes']
+# Numeric columns to convert
+NUMERIC_COLUMNS = ["duration", "orig_bytes", "resp_bytes", "missed_bytes", "orig_pkts", "orig_ip_bytes", "resp_pkts", "resp_ip_bytes"]
 
-LABEL_MAP = {
-    v: k for k, v in {
-        'PartOfAHorizontalPortScan': ['-   Malicious   PartOfAHorizontalPortScan', '(empty)   Malicious   PartOfAHorizontalPortScan'],
-        'Okiru': ['-   Malicious   Okiru', '(empty)   Malicious   Okiru'],
-        'Benign': ['-   Benign   -', '(empty)   Benign   -'],
-        'DDoS': ['-   Malicious   DDoS'],
-        'C&C': ['-   Malicious   C&C', '(empty)   Malicious   C&C'],
-        'Attack': ['-   Malicious   Attack', '(empty)   Malicious   Attack'],
-        'C&C-HeartBeat': ['-   Malicious   C&C-HeartBeat', '(empty)   Malicious   C&C-HeartBeat'],
-        'C&C-FileDownload': ['-   Malicious   C&C-FileDownload'],
-        'C&C-Torii': ['-   Malicious   C&C-Torii'],
-        'C&C-HeartBeat-FileDownload': ['-   Malicious   C&C-HeartBeat-FileDownload'],
-        'FileDownload': ['-   Malicious   FileDownload'],
-        'C&C-Mirai': ['-   Malicious   C&C-Mirai'],
-        'Okiru-Attack': ['-   Malicious   Okiru-Attack']
-    }.items() for v in v
+# Label normalization map
+LABEL_MAP: Dict[str, str] = {
+    "-   Malicious   PartOfAHorizontalPortScan": "PartOfAHorizontalPortScan",
+    "(empty)   Malicious   PartOfAHorizontalPortScan": "PartOfAHorizontalPortScan",
+    "-   Malicious   Okiru": "Okiru",
+    "(empty)   Malicious   Okiru": "Okiru",
+    "-   Benign   -": "Benign",
+    "(empty)   Benign   -": "Benign",
+    "-   Malicious   DDoS": "DDoS",
+    "-   Malicious   C&C": "C&C",
+    "(empty)   Malicious   C&C": "C&C",
+    "-   Malicious   Attack": "Attack",
+    "(empty)   Malicious   Attack": "Attack",
+    "-   Malicious   C&C-HeartBeat": "C&C-HeartBeat",
+    "(empty)   Malicious   C&C-HeartBeat": "C&C-HeartBeat",
+    "-   Malicious   C&C-FileDownload": "C&C-FileDownload",
+    "-   Malicious   C&C-Torii": "C&C-Torii",
+    "-   Malicious   C&C-HeartBeat-FileDownload": "C&C-HeartBeat-FileDownload",
+    "-   Malicious   FileDownload": "FileDownload",
+    "-   Malicious   C&C-Mirai": "C&C-Mirai",
+    "-   Malicious   Okiru-Attack": "Okiru-Attack",
 }
 
 
-def normalize_label(label):
-    return LABEL_MAP.get(label.strip(), label.strip())
+def normalize_label(raw: str) -> str:
+    if not isinstance(raw, str):
+        return "Unknown"
+    s = raw.strip()
+    return LABEL_MAP.get(s, s)
 
 
-def read_conn_log(file_path):
-    """Reads a conn.log.labeled file and returns a cleaned DataFrame."""
-    try:
-        df = pd.read_table(
-            file_path,
-            skiprows=10,
-            nrows=100000,
-            names=COLUMNS,
-            dtype=str,
-            engine='python'
-        )
-        return df.iloc[:-1]  # Drop potentially malformed last row
-    except Exception as e:
-        print(f"[ERROR] Failed to process {file_path}: {e}")
-        return pd.DataFrame()
+def discover_folders(base: Path, capture_ids: Optional[List[int]]) -> List[Path]:
+    """Find all Zeek conn.log.labeled files under the CTU IoT layout."""
+    candidates: List[Path] = []
+    if capture_ids is None:
+        # Auto discover folders that look like CTU IoT captures
+        for p in base.rglob("conn.log.labeled"):
+            if "CTU-IoT-Malware-Capture" in str(p):
+                candidates.append(p)
+    else:
+        for cid in capture_ids:
+            folder = base / f"CTU-IoT-Malware-Capture-{cid}-1" / "bro" / "conn.log.labeled"
+            candidates.append(folder)
+    return candidates
 
 
-def preprocess_dataframe(df):
-    """Preprocesses the combined DataFrame: normalize labels, convert types, one-hot encode."""
-    # Label normalization
-    df['label'] = df['label'].apply(normalize_label)
+def zeek_reader(path: Path, chunksize: int):
+    """Stream rows from a Zeek labeled conn log, skipping meta header lines that start with '#'."""
+    # Many Zeek logs have meta lines starting with '#'
+    # We filter them using a custom iterator that skips such lines.
+    def valid_lines():
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                yield line
 
-    # Drop irrelevant columns
-    df.drop(columns=DROP_COLUMNS, errors='ignore', inplace=True)
+    # Use python engine with whitespace separation since Zeek fields are whitespace or tab separated
+    return pd.read_csv(
+        filepath_or_buffer=valid_lines(),
+        sep=r"\s+",
+        header=None,
+        names=COLUMNS,
+        engine="python",
+        chunksize=chunksize,
+        dtype=str,
+        on_bad_lines="skip",
+    )
 
-    # Convert numeric columns
-    for col in NUMERIC_COLUMNS:
-        df[col] = pd.to_numeric(df[col].replace('-', '0'), errors='coerce')
 
-    # Fill missing values
-    df.fillna(-1, inplace=True)
+def preprocess_chunk(df: pd.DataFrame) -> pd.DataFrame:
+    # Keep only expected columns that exist
+    existing = [c for c in COLUMNS if c in df.columns]
+    df = df[existing].copy()
 
-    # One-hot encoding for categorical columns
-    df = pd.get_dummies(df, columns=['proto', 'conn_state'], prefix=['proto', 'conn'])
+    # Normalize labels
+    if "label" in df.columns:
+        df["label"] = df["label"].map(normalize_label)
+
+    # Convert numeric columns robustly
+    for col in [c for c in NUMERIC_COLUMNS if c in df.columns]:
+        df[col] = pd.to_numeric(df[col].replace("-", "0"), errors="coerce")
+
+    # Drop columns not needed downstream
+    df = df.drop(columns=[c for c in DROP_COLUMNS if c in df.columns], errors="ignore")
+
+    # Fill missing
+    df = df.fillna(-1)
+
+    # One hot encode a small set of categoricals
+    for cat_col, prefix in [("proto", "proto"), ("conn_state", "conn")]:
+        if cat_col in df.columns:
+            df = pd.get_dummies(df, columns=[cat_col], prefix=[prefix], dtype="uint8")
+
+    # Downcast numeric types to save space
+    for col in df.select_dtypes(include=["float64", "int64"]).columns:
+        if pd.api.types.is_float_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], downcast="float")
+        else:
+            df[col] = pd.to_numeric(df[col], downcast="integer")
 
     return df
 
 
-def main():
-    all_data = []
+def write_incremental_csv(df: pd.DataFrame, out_path: Path, write_header: bool) -> None:
+    df.to_csv(out_path, index=False, mode="w" if write_header else "a", header=write_header)
 
-    for file_id in FILE_IDS:
-        folder = f"CTU-IoT-Malware-Capture-{file_id}-1"
-        file_path = os.path.join(BASE_PATH, folder, "bro", "conn.log.labeled")
 
-        if os.path.exists(file_path):
-            df = read_conn_log(file_path)
-            if not df.empty:
-                all_data.append(df)
-        else:
-            print(f"[WARNING] File not found: {file_path}")
+def write_incremental_parquet(df: pd.DataFrame, out_path: Path, write_header: bool) -> None:
+    # For simplicity, append by concatenating in memory for Parquet is not ideal.
+    # In practice, better to write one Parquet per source and later read as a dataset.
+    # Here we write a single file if header is True, else append is skipped.
+    if write_header:
+        df.to_parquet(out_path, index=False)
 
-    if not all_data:
-        print("[ABORT] No data files could be processed.")
+
+def process_all():
+    base = Path(BASE_PATH)
+    out_csv = Path(OUTPUT_CSV)
+    out_parquet = Path(OUTPUT_PARQUET) if OUTPUT_PARQUET else None
+
+    files = discover_folders(base, CAPTURE_IDS)
+
+    if not files:
+        print("[ABORT] No input files found")
         return
 
-    print("[INFO] Concatenating and preprocessing data...")
-    combined_df = pd.concat(all_data, ignore_index=True)
-    processed_df = preprocess_dataframe(combined_df)
+    wrote_header = False
+    total_rows = 0
+    files_found = 0
 
-    processed_df.to_csv(OUTPUT_PATH, index=False)
-    print(f"[SUCCESS] Processed data saved to: {OUTPUT_PATH}")
+    for file_path in files:
+        if not file_path.exists():
+            print(f"[WARN] Missing file: {file_path}")
+            continue
+
+        files_found += 1
+        print(f"[INFO] Processing: {file_path}")
+
+        try:
+            for chunk in zeek_reader(file_path, CHUNK_SIZE):
+                if chunk.empty:
+                    continue
+                processed = preprocess_chunk(chunk)
+                total_rows += len(processed)
+
+                write_incremental_csv(processed, out_csv, write_header=not wrote_header)
+                if out_parquet is not None and not wrote_header:
+                    # only write once for demo purposes
+                    write_incremental_parquet(processed, out_parquet, write_header=True)
+
+                wrote_header = True
+        except Exception as e:
+            print(f"[ERROR] Failed while processing {file_path}: {e}")
+
+    print(f"[SUCCESS] Completed. Files processed: {files_found}, Rows written: {total_rows}")
+    print(f"[SUCCESS] CSV saved to: {out_csv}")
+    if out_parquet is not None:
+        print(f"[SUCCESS] Parquet saved to: {out_parquet}")
 
 
 if __name__ == "__main__":
-    main()
+    process_all()
